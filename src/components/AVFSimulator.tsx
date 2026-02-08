@@ -147,15 +147,20 @@ const AVFSimulator = () => {
     if (arteryDia < 2.0 || veinDia < 2.5) score -= 30; // Critical warning
     else score += 10; // Baseline met
 
-    if (angle < 30 || angle > 70) score -= 10; // Mechanical disadvantage
+    // Anastomosis Angle (Revised)
+    // 30-60: Ideal (+10)
+    // 20-30 or 60-80: Acceptable (0)
+    // <20 or >80: Risk of kinking/flow separation (-10)
+    if (angle >= 30 && angle <= 60) score += 10;
+    else if (angle < 20 || angle > 80) score -= 10;
 
     // E. A/V Ratio (Empirical)
     // User feedback: A/V Ratio <= 0.8 has surprisingly high success rate.
     if (avRatio <= 0.8) score += 20;
 
     // 確率変換 (Sigmoid)
-    // Center at 20, slightly gentler slope
-    const prob = 1 / (1 + Math.exp(-(score - 20) / 15)) * 100;
+    // Relaxed strictness: Center shifted from 20 -> 10 implies higher prob for same score
+    const prob = 1 / (1 + Math.exp(-(score - 10) / 15)) * 100;
 
     // 上限キャップ
     const finalProb = Math.min(98, Math.max(1, prob));
