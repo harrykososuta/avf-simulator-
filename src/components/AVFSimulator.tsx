@@ -106,74 +106,6 @@ const AVFSimulator = () => {
     const osi = Math.min(0.5, Math.max(0.01, (angle - 25) / 160 + (0.04 / (velocity_v + 0.05))));
     const rrt = 1 / (Math.max(0.01, (1 - 2 * osi) * tawss));
 
-    // 3. 成熟予測 (厳格化版)
-    let score = 0;
-
-    // 血管径 (必須条件)
-    if (arteryDia >= 2.5) score += 15;
-    else if (arteryDia >= 2.0) score += 10;
-    else score -= 20; // 2.0mm未満はペナルティ大
-
-    if (veinDia >= 3.0) score += 10;
-    else if (veinDia >= 2.5) score += 5;
-
-    // A/V比 (0.8以下が理想)
-    if (avRatio <= 0.8) score += 15;
-    else score -= 5;
-
-    // TAWSS (Northrup基準: 33Pa付近がベスト)
-    if (tawss >= 25 && tawss <= 45) score += 25; // 理想的
-    else if (tawss >= 15 && tawss < 25) score += 10; // まずまず
-    else if (tawss < 10) score -= 15; // 低すぎる(不全リスク)
-    else if (tawss > 60) score -= 10; // 高すぎる(損傷リスク)
-
-    // OSI
-    if (osi <= 0.1) score += 10;
-    else score -= 5;
-
-    // 吻合角度 (Sadaghianloo基準: 極端な鋭角はリスク)
-    if (angle >= 30 && angle <= 50) score += 10; // 推奨域
-    else if (angle < 30) score -= 10; // 鋭角すぎる(狭窄リスク)
-    else if (angle > 70) score -= 5;  // 鈍角すぎる
-
-    // 確率変換 (シグモイド関数の調整: 中心をずらして厳しくする)
-    const prob = 1 / (1 + Math.exp(-(score - 40) / 12)) * 100;
-
-    // 上限キャップ (どんなに良くても98%程度)
-    const finalProb = Math.min(98, Math.max(1, prob));
-
-    // 4. 経過予測
-    const growthFactor = (finalProb / 100);
-    const maxFlow = flowRate * (1 + growthFactor * 3.0); // 成功なら初期の4倍程度まで伸びる
-    const maxDia = veinDia * (1 + growthFactor * 1.8);
-
-    const timePoints: TimePoint[] = [
-      { label: 'Op', week: 0, flow: flowRate, dia: veinDia },
-      { label: '1D', week: 0.14, flow: flowRate * 1.1, dia: veinDia * 1.02 },
-      { label: '2W', week: 2, flow: flowRate + (maxFlow - flowRate) * 0.6, dia: veinDia + (maxDia - veinDia) * 0.5 },
-      { label: '6W', week: 6, flow: flowRate + (maxFlow - flowRate) * 0.9, dia: veinDia + (maxDia - veinDia) * 0.85 },
-      { label: '3M', week: 12, flow: maxFlow * 0.98, dia: maxDia * 0.98 },
-      { label: '6M', week: 24, flow: maxFlow, dia: maxDia }
-    ];
-
-    // レポート
-    let report = "";
-    let status: Metrics['status'] = "neutral";
-
-    if (arteryDia < 2.0) {
-      report = "動脈径が2.0mm未満です。RCAVFのガイドライン基準を下回っており、成熟不全のリスクが極めて高い状態です。";
-      status = "bad";
-    } else if (angle < 30) {
-      report = "吻合角度が鋭角すぎます(<30°)。Sadaghianlooらの報告では、吻合部狭窄および再介入のリスクが増加します。";
-      status = "warning";
-    } else if (tawss < 12) {
-      report = "予測WSSが低値です。Northrupらの成功群データ(約33Pa)と比較して拡張シグナルが不足しています。";
-      status = "bad";
-    } else {
-      report = `成功確率は${Math.round(finalProb)}%です。適切な角度(30-50°)とWSSが確保されており、順調な成熟が期待されます。`;
-      status = finalProb > 70 ? "good" : "warning";
-    }
-
     // --- 追加パラメータ計算 (New) ---
     // Reynolds Number (Re)
     const rho = 1060; // kg/m3 (Blood density)
@@ -191,6 +123,73 @@ const AVFSimulator = () => {
 
     // Effective Viscosity (mPa.s)
     const effVisc = mu * 1000;
+
+    // 3. 成熟予測 (Clinical Evidence Based)
+    let score = 0;
+
+    // A. WSS (Acute Phase Trigger)
+    // > 20 Pa: Positive remodeling trigger (Good)
+    // < 1 Pa: Stagnation / IH risk (Bad)
+    if (tawss >= 20) score += 30;
+    else if (tawss >= 2) score += 10;
+    else if (tawss < 1) score -= 30;
+
+    // B. OSI (Disturbed Flow)
+    // > 0.1: Risk of stenosis (Bad)
+    if (osi > 0.1) score -= 20;
+    else score += 10; // Laminar flow
+
+    // C. Reynolds Number (Turbulence)
+    // Re > 2000: Thrill / High freq vibration (Bad)
+    if (re > 2000) score -= 10;
+
+    // D. Geometry & Diameter (Prerequisites)
+    if (arteryDia < 2.0 || veinDia < 2.5) score -= 30; // Critical warning
+    else score += 10; // Baseline met
+
+    if (angle < 30 || angle > 70) score -= 10; // Mechanical disadvantage
+
+    // 確率変換 (Sigmoid)
+    // Center at 20, slightly gentler slope
+    const prob = 1 / (1 + Math.exp(-(score - 20) / 15)) * 100;
+
+    // 上限キャップ
+    const finalProb = Math.min(98, Math.max(1, prob));
+
+    // 4. 経過予測
+    const growthFactor = (finalProb / 100);
+    const maxFlow = flowRate * (1 + growthFactor * 3.0);
+    const maxDia = veinDia * (1 + growthFactor * 1.8);
+
+    const timePoints: TimePoint[] = [
+      { label: 'Op', week: 0, flow: flowRate, dia: veinDia },
+      { label: '1D', week: 0.14, flow: flowRate * 1.1, dia: veinDia * 1.02 },
+      { label: '2W', week: 2, flow: flowRate + (maxFlow - flowRate) * 0.6, dia: veinDia + (maxDia - veinDia) * 0.5 },
+      { label: '6W', week: 6, flow: flowRate + (maxFlow - flowRate) * 0.9, dia: veinDia + (maxDia - veinDia) * 0.85 },
+      { label: '3M', week: 12, flow: maxFlow * 0.98, dia: maxDia * 0.98 },
+      { label: '6M', week: 24, flow: maxFlow, dia: maxDia }
+    ];
+
+    // レポート
+    let report = "";
+    let status: Metrics['status'] = "neutral";
+
+    if (arteryDia < 2.0 || veinDia < 2.5) {
+      report = "血管径がガイドライン基準未満(A<2.0 or V<2.5)です。成熟不全のリスクが極めて高い状態です。";
+      status = "bad";
+    } else if (tawss < 1) {
+      report = "WSSが低すぎます(<1Pa)。血流停滞による内膜肥厚(IH)のリスクがあります。";
+      status = "bad";
+    } else if (osi > 0.1) {
+      report = "OSIが高値(>0.1)であり、吻合部付近で血管壁への振動刺激が生じています。将来的な狭窄リスクを示唆します。";
+      status = "warning";
+    } else if (tawss >= 20) {
+      report = `成功確率は${Math.round(finalProb)}%です。術後の高いWSS(>20Pa)が確保されており、良好な血管拡張(外向きリモデリング)が期待されます。`;
+      status = "good";
+    } else {
+      report = `成功確率は${Math.round(finalProb)}%です。条件は悪くありませんが、継続的なモニタリングが推奨されます。`;
+      status = finalProb > 60 ? "good" : "warning";
+    }
 
     setMetrics({ tawss, osi, rrt, avRatio, prob: finalProb, re, de, wssg, effVisc, report, status, prediction: timePoints });
 
@@ -590,9 +589,9 @@ const AVFSimulator = () => {
               desc="Secondary Flow"
             />
             <MetricCard
-              label="WSS Gradient" value={metrics.wssg.toFixed(1)} unit="Pa/m"
+              label="WSS Gradient" value={(metrics.wssg / 1000).toFixed(1)} unit="kPa/m"
               status={metrics.wssg > 3000 ? 'warning' : 'good'}
-              desc="Spatial Gradient"
+              desc="Spatial Gradient relative"
             />
             <MetricCard
               label="Eff. Viscosity" value={metrics.effVisc.toFixed(2)} unit="mPa·s"
