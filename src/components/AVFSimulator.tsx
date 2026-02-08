@@ -149,6 +149,10 @@ const AVFSimulator = () => {
 
     if (angle < 30 || angle > 70) score -= 10; // Mechanical disadvantage
 
+    // E. A/V Ratio (Empirical)
+    // User feedback: A/V Ratio <= 0.8 has surprisingly high success rate.
+    if (avRatio <= 0.8) score += 20;
+
     // 確率変換 (Sigmoid)
     // Center at 20, slightly gentler slope
     const prob = 1 / (1 + Math.exp(-(score - 20) / 15)) * 100;
